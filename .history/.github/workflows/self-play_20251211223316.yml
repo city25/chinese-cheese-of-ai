@@ -1,0 +1,83 @@
+name: Continuous Self-Play Training
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1440  # 24小时上限，防止意外情况
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Create data directory
+      run: mkdir -p data
+    
+    - name: Calculate training duration
+      id: duration
+      run: |
+        # 获取当前UTC时间（GitHub Actions使用UTC时间）
+        CURRENT_HOUR=$(date -u +%H)
+        CURRENT_MIN=$(date -u +%M)
+        
+        # 计算目标停止时间（北京时间5:55 = UTC时间前一天的21:55）
+        # 如果当前UTC时间 > 21:55，则目标时间是今天21:55
+        # 否则是昨天21:55（跨天情况）
+        TARGET_HOUR=21
+        TARGET_MIN=55
+        
+        # 计算当前时间到目标时间的秒数差
+        CURRENT_TOTAL=$((CURRENT_HOUR * 3600 + CURRENT_MIN * 60))
+        TARGET_TOTAL=$((TARGET_HOUR * 3600 + TARGET_MIN * 60))
+        
+        if [ $CURRENT_TOTAL -le $TARGET_TOTAL ]; then
+          # 目标时间是今天（同一天）
+          SECONDS_UNTIL_STOP=$((TARGET_TOTAL - CURRENT_TOTAL))
+        else
+          # 目标时间是明天（跨天）
+          SECONDS_UNTIL_STOP=$((86400 - CURRENT_TOTAL + TARGET_TOTAL))
+        fi
+        
+        echo "Training will run for $SECONDS_UNTIL_STOP seconds until UTC 21:55 (Beijing 5:55)"
+        echo "seconds_until_stop=$SECONDS_UNTIL_STOP" >> $GITHUB_OUTPUT
+    
+    - name: Run continuous training
+      env:
+        PYTHONUNBUFFERED: 1
+        TRAINING_DURATION: ${{ steps.duration.outputs.seconds_until_stop }}
+      run: |
+        echo "开始持续训练，将在北京时间5:55自动停止..."
+        python scripts/train.py --duration $TRAINING_DURATION
+    
+    - name: Upload training data
+      if: always()  # 即使训练超时也上传
+      uses: actions/upload-artifact@v3
+      with:
+        name: training-data-${{ github.run_number }}-${{ github.run_attempt }}
+        path: |
+          data/
+          !data/*.log
+        retention-days: 30
+    
+    - name: Commit updated stats
+      if: always()
+      run: |
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+        git add data/stats.json data/ai_stats.json data/benchmark_report.json || true
+        git diff --quiet && git diff --staged --quiet || git commit -m "Auto-update training stats from run ${{ github.run_number }}"
+        git push || echo "No changes to push"
