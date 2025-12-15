@@ -121,7 +121,12 @@ class ChessAI:
                 if piece != 0:
                     value = self.piece_weights.get(abs(piece), 0)
                     score += value if piece > 0 else -value
-        return score
+        
+        # 🚨 核心修复：黑方视角反转
+        if self.player == 'black':
+            score = -score
+        
+        return score  # ✅ 修复：正确缩进
     
     def get_best_move(self, chess_game: ChineseChess) -> Tuple:
         """获取最佳走法（带性能监控）"""
